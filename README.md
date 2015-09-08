@@ -6,6 +6,7 @@ This program displays current power usage of various things in the system power,
 The indicator uses the battery dissipation level for the overall power draw, and displayed in Watts on the indicator, a running average is displayed in brackets. Four graphs show the power usage (as given by RAPL) for other items in the system.
 
 To run:
+
     $ make
     $ ./indicator-power
 

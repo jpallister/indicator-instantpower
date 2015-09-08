@@ -14,21 +14,23 @@ class PowerIndicator(object):
         self.ind = appindicator.Indicator("instantpower-indicator", "", appindicator.CATEGORY_APPLICATION_STATUS)
         self.ind.set_status(appindicator.STATUS_ACTIVE)
         # print dir(self.ind)
-        self.icon = tempfile.NamedTemporaryFile(suffix=".png")
+        self.icon1 = tempfile.NamedTemporaryFile(suffix=".png")
+        self.icon2 = tempfile.NamedTemporaryFile(suffix=".png")
         self.limit = 48
         self.max_power = 1
         self.adv_powers = collections.defaultdict(list)
 
         self.create_icon()
 
-        self.ind.set_icon(self.icon.name)
+        self.ind.set_icon(self.icon1.name)
         self.menu_setup()
         self.ind.set_menu(self.menu)
         self.powers = []
         self.find_files()
 
     def create_icon(self):
-        name = self.icon.name
+        name = self.icon1.name
+        self.icon1, self.icon2 = self.icon2, self.icon1
 
         spacing = 52
         icon = PIL.Image.new("RGBA", ((self.limit*2+4)*max(len(self.adv_powers),1)+spacing,32))
@@ -57,7 +59,7 @@ class PowerIndicator(object):
         draw.text((xbase,31-15),"0W".format(self.max_power),(255,255,255),font=font)
 
         icon.save(name)
-        self.ind.set_icon(self.icon.name)
+        self.ind.set_icon(name)
 
     def find_files(self):
         self.voltage_file = subprocess.Popen("find /sys -name voltage_now 2> /dev/null", shell=True, stdout=subprocess.PIPE).communicate()[0].split('\n')[0]
@@ -133,7 +135,9 @@ class PowerIndicator(object):
         self.max_power = m
         self.create_icon()
         self.get_power()
-        gtk.timeout_add(5, self.get_advanced_power)
+        self.ind.set_label(" ")
+        self.menu.show()
+        gtk.timeout_add(50, self.get_advanced_power)
 
     def get_temperature(self):
         l = [0]

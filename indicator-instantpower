@@ -1,0 +1,151 @@
+#!/usr/bin/python
+# -*- coding: utf8 -*-
+
+import sys, os
+import gtk
+import appindicator
+import subprocess
+import PIL.Image, PIL.ImageDraw, PIL.ImageFont
+import tempfile
+import collections
+
+class PowerIndicator(object):
+    def __init__(self):
+        self.ind = appindicator.Indicator("instantpower-indicator", "", appindicator.CATEGORY_APPLICATION_STATUS)
+        self.ind.set_status(appindicator.STATUS_ACTIVE)
+        # print dir(self.ind)
+        self.icon = tempfile.NamedTemporaryFile(suffix=".png")
+        self.limit = 48
+        self.max_power = 1
+        self.adv_powers = collections.defaultdict(list)
+
+        self.create_icon()
+
+        self.ind.set_icon(self.icon.name)
+        self.menu_setup()
+        self.ind.set_menu(self.menu)
+        self.powers = []
+        self.find_files()
+
+    def create_icon(self):
+        name = self.icon.name
+
+        spacing = 52
+        icon = PIL.Image.new("RGBA", ((self.limit*2+4)*max(len(self.adv_powers),1)+spacing,32))
+
+        colours = [(255,0,0,255), (0,255,0,255), (0,0,255,255), (255,255,0,255)]
+
+        fonts_path = os.path.dirname(os.path.realpath(__file__)) + "/fonts"
+        font = PIL.ImageFont.truetype(os.path.join(fonts_path, 'ubuntumono.ttf'), 15)
+        draw = PIL.ImageDraw.Draw(icon)
+
+
+        for j, (domain, values) in enumerate(self.adv_powers.items()):
+            xbase = (self.limit*2+4)*j
+            for i,v in enumerate(values):
+                for y in range(31, 31- int(v/self.max_power*31),-1):
+                    icon.putpixel((xbase+i*2, y), colours[j])
+                    icon.putpixel((xbase+i*2+1,y), colours[j])
+
+            draw.text((xbase,0),domain[7:],(255,255,255),font=font)
+
+        for y in range(0,32):
+            icon.putpixel(((self.limit*2+4)*max(len(self.adv_powers),1)+spacing-1,y),(255,255,255))
+
+        xbase = (self.limit*2+4)*len(self.adv_powers)
+        draw.text((xbase,0),"{:2.1f}W".format(self.max_power),(255,255,255),font=font)
+        draw.text((xbase,31-15),"0W".format(self.max_power),(255,255,255),font=font)
+
+        icon.save(name)
+        self.ind.set_icon(self.icon.name)
+
+    def find_files(self):
+        self.voltage_file = subprocess.Popen("find /sys -name voltage_now 2> /dev/null", shell=True, stdout=subprocess.PIPE).communicate()[0].split('\n')[0]
+        self.current_file = subprocess.Popen("find /sys -name current_now 2> /dev/null", shell=True, stdout=subprocess.PIPE).communicate()[0].split('\n')[0]
+        self.online_file = subprocess.Popen("find /sys -name online 2> /dev/null | grep power_supply", shell=True, stdout=subprocess.PIPE).communicate()[0].split('\n')[0]
+        gtk.timeout_add(60000, self.find_files)
+
+    def menu_setup(self):
+        self.menu = gtk.Menu()
+
+        self.quit_item = gtk.MenuItem("Quit")
+        self.quit_item.connect("activate", self.quit)
+        self.quit_item.show()
+        self.menu.append(self.quit_item)
+    def main(self):
+        # self.check_mail()
+        # gtk.timeout_add(1000, self.get_power)
+        gtk.timeout_add(1000, self.get_advanced_power)
+        gtk.main()
+
+    def quit(self, widget):
+        sys.exit(0)
+
+    def read_file(self, f):
+        fd = open(f)
+        return int(fd.read())
+
+    def get_power(self):
+        try:
+            self.plugged_in = bool(self.read_file(self.online_file))
+            self.voltage = self.read_file(self.voltage_file) / 1000000.
+            self.current = self.read_file(self.current_file) / 1000000.
+        except:
+            self.plugged_in = True
+            self.voltage = 0
+            self.current = 0
+        self.power = self.voltage * self.current
+        self.get_temperature()
+        self.powers.append(self.power)
+
+        adv_str = ""
+        # for k, v in self.adv_powers.items():
+        #     adv_str += "{}:{:1.1f} ".format(k[7:],v[-1])
+
+        if len(self.powers) > 20:
+            self.powers = self.powers[-20:]
+        if self.plugged_in:
+            # self.ind.set_label(adv_str+"{:2d}°C".format(self.temperature))
+            self.ind.set_label("")
+        else:
+            # self.ind.set_label(adv_str+"{:2d}°C  {: >4.1f}W ({: >4.1f}W)".format(self.temperature, self.power, sum(self.powers)/float(len(self.powers))))
+            self.ind.set_label(adv_str+" {: >4.1f}W ({: >4.1f}W)".format(self.power, sum(self.powers)/float(len(self.powers))))
+        # gtk.timeout_add(1000, self.get_power)
+
+    def get_advanced_power(self):
+        rapl_path = os.path.dirname(os.path.realpath(__file__)) + "/rapl"
+        p = subprocess.Popen([rapl_path,"0.5"], stdout=subprocess.PIPE)
+        text = p.communicate()[0]
+
+        domain_points = text.split("\n")[1:]
+        m = 0
+
+        for p in domain_points:
+            if not p:
+                continue
+            domain, energy, time, avg_power = p.split(",")
+            domain = domain.strip()
+            # print domain, avg_power
+            self.adv_powers[domain].append(float(avg_power))
+            self.adv_powers[domain] = self.adv_powers[domain.strip()][-self.limit:]
+            m = max(m, max(self.adv_powers[domain]))
+
+        self.max_power = m
+        self.create_icon()
+        self.get_power()
+        gtk.timeout_add(5, self.get_advanced_power)
+
+    def get_temperature(self):
+        l = [0]
+        for i in range(5):
+            try:
+                l.append(self.read_file("/sys/devices/virtual/thermal/thermal_zone{}/temp".format(i+1)))
+            except IOError:
+                pass
+
+        self.temperature = max(l)/ 1000
+
+
+if __name__ == "__main__":
+    indicator = PowerIndicator()
+    indicator.main()
